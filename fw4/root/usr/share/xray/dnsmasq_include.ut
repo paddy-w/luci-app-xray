@@ -1,12 +1,8 @@
 #!/usr/bin/utpl
 {%
     "use strict";
-    import { cursor } from "uci";
-    const config = function () {
-        const uci = cursor();
-        uci.load("xray_fw4");
-        return uci.get_all("xray_fw4");
-    }();
+    import { load_config } from "./common/config.mjs";
+    const config = load_config();
     const general = config[filter(keys(config), k => config[k][".type"] == "general")[0]];
     const dns_port = int(general["dns_port"]);
     const dns_count = int(general["dns_count"] || 0);

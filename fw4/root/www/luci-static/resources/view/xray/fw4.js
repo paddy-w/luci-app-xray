@@ -1,7 +1,6 @@
 'use strict';
 'require form';
 'require fs';
-'require network';
 'require tools.widgets as widgets';
 'require uci';
 'require view';
@@ -248,14 +247,12 @@ return view.extend({
     load: function () {
         return Promise.all([
             uci.load(variant),
-            fs.list("/usr/share/xray"),
-            network.getHostHints()
+            fs.list("/usr/share/xray")
         ]);
     },
 
     render: function (load_result) {
         const config_data = load_result[0];
-        const geoip_direct_code = uci.get_first(config_data, "general", "geoip_direct_code");
         const { geoip_existence, geoip_size, geosite_existence, geosite_size, optional_features, xray_bin_default, xray_running } = check_resource_files(load_result[1]);
         const status_text = xray_running ? _("[Xray is running]") : _("[Xray is stopped]");
 
@@ -268,7 +265,7 @@ return view.extend({
 
         const m = new form.Map(variant, _('Xray (firewall4)'), status_text + " " + asset_file_status);
 
-        var s, o, ss;
+        let s, o, ss;
 
         s = m.section(form.TypedSection, 'general');
         s.addremove = false;
@@ -282,18 +279,40 @@ return view.extend({
             o.value("/usr/bin/xray", _("/usr/bin/xray (default, exist)"));
         }
 
-        o = s.taboption('general', form.ListValue, 'main_server', _('TCP Server'));
-        o.datatype = "uciname";
-        o.value("disabled", _("Disabled"));
-        for (const v of uci.sections(config_data, "servers")) {
-            o.value(v[".name"], v.alias || v.server + ":" + v.server_port);
-        }
+        let tcp_balancer = s.taboption('general', form.MultiValue, 'tcp_balancer', _('TCP Server (IPv4)'), _("Select multiple outbound servers to enable load balancing. Select none to disable TCP Outbound."));
+        tcp_balancer.datatype = "uciname";
+        tcp_balancer.rmempty = true;
 
-        o = s.taboption('general', form.ListValue, 'tproxy_udp_server', _('UDP Server'));
-        o.datatype = "uciname";
-        o.value("disabled", _("Disabled"));
-        for (const v of uci.sections(config_data, "servers")) {
-            o.value(v[".name"], v.alias || v.server + ":" + v.server_port);
+        let udp_balancer = s.taboption('general', form.MultiValue, 'udp_balancer', _('UDP Server (IPv4)'), _("Select multiple outbound servers to enable load balancing. Select none to disable UDP Outbound."));
+        udp_balancer.datatype = "uciname";
+        udp_balancer.rmempty = true;
+
+        let tcp_balancer_v6 = s.taboption('general', form.MultiValue, 'tcp_balancer_v6', _('TCP Server (IPv6)'), _("Select multiple outbound servers to enable load balancing. Select none to disable TCP Outbound."));
+        tcp_balancer_v6.datatype = "uciname";
+        tcp_balancer_v6.rmempty = true;
+
+        let udp_balancer_v6 = s.taboption('general', form.MultiValue, 'udp_balancer_v6', _('UDP Server (IPv6)'), _("Select multiple outbound servers to enable load balancing. Select none to disable UDP Outbound."));
+        udp_balancer_v6.datatype = "uciname";
+        udp_balancer_v6.rmempty = true;
+
+        const servers = uci.sections(config_data, "servers");
+        if (servers.length == 0) {
+            tcp_balancer.value("direct", _("No server configured"));
+            udp_balancer.value("direct", _("No server configured"));
+            tcp_balancer_v6.value("direct", _("No server configured"));
+            udp_balancer_v6.value("direct", _("No server configured"));
+
+            tcp_balancer.readonly = true;
+            udp_balancer.readonly = true;
+            tcp_balancer_v6.readonly = true;
+            udp_balancer_v6.readonly = true;
+        } else {
+            for (const v of servers) {
+                tcp_balancer.value(v[".name"], v.alias || v.server + ":" + v.server_port);
+                udp_balancer.value(v[".name"], v.alias || v.server + ":" + v.server_port);
+                tcp_balancer_v6.value(v[".name"], v.alias || v.server + ":" + v.server_port);
+                udp_balancer_v6.value(v[".name"], v.alias || v.server + ":" + v.server_port);
+            }
         }
 
         o = s.taboption('general', form.Flag, 'transparent_proxy_enable', _('Enable Transparent Proxy'), _('This enables DNS query forwarding and TProxy for both TCP and UDP connections.'));
@@ -608,52 +627,45 @@ return view.extend({
 
         s.tab('proxy', _('Proxy Settings'));
 
-        o = s.taboption('proxy', form.Value, 'tproxy_port_tcp', _('Transparent Proxy Port (TCP)'));
+        o = s.taboption('proxy', form.Value, 'tproxy_port_tcp', _('Transparent proxy port (TCP4)'));
         o.datatype = 'port';
         o.default = 1080;
 
-        o = s.taboption('proxy', form.Value, 'tproxy_port_udp', _('Transparent Proxy Port (UDP)'));
+        o = s.taboption('proxy', form.Value, 'tproxy_port_udp', _('Transparent proxy port (UDP4)'));
         o.datatype = 'port';
         o.default = 1081;
 
-        o = s.taboption('proxy', form.Value, 'socks_port', _('Socks5 Proxy Port'));
+        o = s.taboption('proxy', form.Value, 'tproxy_port_tcp_v6', _('Transparent proxy port (TCP6)'));
+        o.datatype = 'port';
+        o.default = 1084;
+
+        o = s.taboption('proxy', form.Value, 'tproxy_port_udp_v6', _('Transparent proxy port (UDP6)'));
+        o.datatype = 'port';
+        o.default = 1085;
+
+        o = s.taboption('proxy', form.Value, 'socks_port', _('Socks5 proxy port'));
         o.datatype = 'port';
         o.default = 1082;
 
-        o = s.taboption('proxy', form.Value, 'http_port', _('HTTP Proxy Port'));
+        o = s.taboption('proxy', form.Value, 'http_port', _('HTTP proxy port'));
         o.datatype = 'port';
         o.default = 1083;
 
-        o = s.taboption('proxy', form.DynamicList, 'uids_direct', _('Skip Proxy for uids'), _("Processes started by users with these uids won't be forwarded through Xray."));
+        o = s.taboption('proxy', form.DynamicList, 'uids_direct', _('Bypass tproxy for uids'), _("Processes started by users with these uids won't be forwarded through Xray."));
         o.datatype = "integer";
 
-        o = s.taboption('proxy', form.DynamicList, 'gids_direct', _('Skip Proxy for gids'), _("Processes started by users in groups with these gids won't be forwarded through Xray."));
+        o = s.taboption('proxy', form.DynamicList, 'gids_direct', _('Bypass tproxy for gids'), _("Processes started by users in groups with these gids won't be forwarded through Xray."));
         o.datatype = "integer";
 
-        o = s.taboption('proxy', widgets.DeviceSelect, 'lan_ifaces', _("LAN Interface"));
+        o = s.taboption('proxy', form.Value, 'firewall_priority', _('Priority for firewall rules'), _('See firewall status page for rules Xray used and <a href="https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks#Priority_within_hook">Netfilter Internal Priority</a> for reference.'));
+        o.datatype = 'range(-49, 49)';
+        o.default = 10;
+
+        o = s.taboption('proxy', widgets.DeviceSelect, 'lan_ifaces', _("Interfaces for tproxy"), _("Enable transparent proxy on these interfaces."));
         o.noaliases = true;
         o.rmempty = false;
         o.nocreate = true;
-
-        o = s.taboption('proxy', form.SectionValue, "access_control_lan_hosts", form.TableSection, 'lan_hosts', _('LAN Hosts Access Control'), _("Will not enable transparent proxy for these MAC addresses."));
-
-        ss = o.subsection;
-        ss.sortable = false;
-        ss.anonymous = true;
-        ss.addremove = true;
-
-        o = ss.option(form.Value, "macaddr", _("MAC Address"));
-        L.sortedKeys(load_result[2].hosts).forEach(function (mac) {
-            o.value(mac, E([], [mac, ' (', E('strong', [load_result[2].hosts[mac].name || L.toArray(load_result[2].hosts[mac].ipaddrs || load_result[2].hosts[mac].ipv4)[0] || L.toArray(load_result[2].hosts[mac].ip6addrs || load_result[2].hosts[mac].ipv6)[0] || '?']), ')']));
-        });
-
-        o.datatype = "macaddr";
-        o.rmempty = false;
-
-        o = ss.option(form.ListValue, "bypassed", _("Access Control Strategy"));
-        o.value("0", "Always forwarded");
-        o.value("1", "Always bypassed");
-        o.rmempty = false;
+        o.multiple = true;
 
         s.tab('dns', _('DNS Settings'));
 
@@ -701,44 +713,41 @@ return view.extend({
         o.datatype = 'range(0, 50)';
         o.default = 0;
 
-        s.tab('transparent_proxy_rules', _('Transparent Proxy Rules'));
-
-        if (geoip_direct_code === "upgrade" || geoip_direct_code === void 0) {
-            if (geoip_existence) {
-                o = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list', _('GeoIP Direct Code List'), _("Hosts in these GeoIP sets will not be forwarded through Xray. Remove all items to forward all non-private hosts."));
-            } else {
-                o = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list', _('GeoIP Direct Code List'), _("Resource file /usr/share/xray/geoip.dat not exist. All network traffic will be forwarded. <br/> Compile your firmware again with data files to use this feature, or<br/><a href=\"https://github.com/v2fly/geoip\">download one</a> (maybe disable transparent proxy first) and upload it to your router."));
-                o.readonly = true;
-            }
-        } else {
-            if (geoip_existence) {
-                o = s.taboption('transparent_proxy_rules', form.Value, 'geoip_direct_code', _('GeoIP Direct Code'), _("Hosts in this GeoIP set will not be forwarded through Xray. <br/> Switching to new format (by selecting 'Unspecified') is recommended for multiple GeoIP options here, <br/> and is required if you want to forward all non-private hosts. This legacy option will be removed later."));
-            } else {
-                o = s.taboption('transparent_proxy_rules', form.Value, 'geoip_direct_code', _('GeoIP Direct Code'), _("Resource file /usr/share/xray/geoip.dat not exist. All network traffic will be forwarded. <br/> Compile your firmware again with data files to use this feature, or<br/><a href=\"https://github.com/v2fly/geoip\">download one</a> (maybe disable transparent proxy first) and upload it to your router."));
-                o.readonly = true;
-            }
-        }
-        o.value("cn", "cn");
-        o.value("telegram", "telegram");
-        o.datatype = "string";
-
-        o = s.taboption('transparent_proxy_rules', form.ListValue, 'routing_domain_strategy', _('Routing Domain Strategy'), _("Domain resolution strategy when matching domain against rules."));
+        o = s.taboption('dns', form.ListValue, 'routing_domain_strategy', _('Routing Domain Strategy'), _("Domain resolution strategy when matching domain against rules. (For tproxy, this is effective only when sniffing is enabled.)"));
         o.value("AsIs", "AsIs");
         o.value("IPIfNonMatch", "IPIfNonMatch");
         o.value("IPOnDemand", "IPOnDemand");
         o.default = "AsIs";
         o.rmempty = false;
 
-        o = s.taboption('transparent_proxy_rules', form.Value, 'mark', _('Socket Mark Number'), _('Avoid proxy loopback problems with local (gateway) traffic'));
-        o.datatype = 'range(1, 255)';
-        o.default = 255;
+        s.tab('transparent_proxy_rules', _('Transparent Proxy Rules'));
+
+        if (geoip_existence) {
+            let geoip_direct_code_list = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list', _('GeoIP Direct Code List (IPv4)'), _("Hosts in these GeoIP sets will not be forwarded through Xray. Remove all items to forward all non-private hosts."));
+            geoip_direct_code_list.datatype = "string";
+            geoip_direct_code_list.value("cn", "cn");
+            geoip_direct_code_list.value("telegram", "telegram");
+
+            let geoip_direct_code_list_v6 = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list_v6', _('GeoIP Direct Code List (IPv6)'), _("Hosts in these GeoIP sets will not be forwarded through Xray. Remove all items to forward all non-private hosts."));
+            geoip_direct_code_list_v6.datatype = "string";
+            geoip_direct_code_list_v6.value("cn", "cn");
+            geoip_direct_code_list_v6.value("telegram", "telegram");
+        } else {
+            let geoip_direct_code_list = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list', _('GeoIP Direct Code List (IPv4)'), _("Resource file /usr/share/xray/geoip.dat not exist. All network traffic will be forwarded. <br/> Compile your firmware again with data files to use this feature, or<br/><a href=\"https://github.com/v2fly/geoip\">download one</a> (maybe disable transparent proxy first) and upload it to your router."));
+            geoip_direct_code_list.readonly = true;
+            geoip_direct_code_list.datatype = "string";
+
+            let geoip_direct_code_list_v6 = s.taboption('transparent_proxy_rules', form.DynamicList, 'geoip_direct_code_list_v6', _('GeoIP Direct Code List (IPv6)'), _("Resource file /usr/share/xray/geoip.dat not exist. All network traffic will be forwarded. <br/> Compile your firmware again with data files to use this feature, or<br/><a href=\"https://github.com/v2fly/geoip\">download one</a> (maybe disable transparent proxy first) and upload it to your router."));
+            geoip_direct_code_list_v6.readonly = true;
+            geoip_direct_code_list_v6.datatype = "string";
+        }
 
         o = s.taboption('transparent_proxy_rules', form.DynamicList, "wan_bp_ips", _("Bypassed IP"), _("Requests to these IPs won't be forwarded through Xray."));
-        o.datatype = "ip4addr";
+        o.datatype = "ipaddr";
         o.rmempty = true;
 
-        o = s.taboption('transparent_proxy_rules', form.DynamicList, "wan_fw_ips", _("Forwarded IP"));
-        o.datatype = "ip4addr";
+        o = s.taboption('transparent_proxy_rules', form.DynamicList, "wan_fw_ips", _("Forwarded IP"), _("Requests to these IPs will always be handled by Xray (but still might be bypassed by Xray itself, like private addresses).<br/>Useful for some really strange network. If you really need to forward private addresses, try Manual Transparent Proxy below."));
+        o.datatype = "ipaddr";
         o.rmempty = true;
 
         o = s.taboption('transparent_proxy_rules', form.ListValue, 'transparent_default_port_policy', _('Default Ports Policy'));
@@ -768,59 +777,9 @@ return view.extend({
         o.datatype = "portrange";
         o.rmempty = true;
 
-        o = s.taboption('transparent_proxy_rules', form.SectionValue, "access_control_manual_tproxy", form.GridSection, 'manual_tproxy', _('Manual Transparent Proxy'), _('Compared to iptables REDIRECT, Xray could do NAT46 / NAT64 (for example accessing IPv6 only sites). See <a href="https://github.com/v2ray/v2ray-core/issues/2233">FakeDNS</a> for details.'));
-
-        ss = o.subsection;
-        ss.sortable = false;
-        ss.anonymous = true;
-        ss.addremove = true;
-
-        o = ss.option(form.Value, "source_addr", _("Source Address"));
-        o.datatype = "ipaddr";
-        o.rmempty = true;
-
-        o = ss.option(form.Value, "source_port", _("Source Port"));
-        o.rmempty = true;
-
-        o = ss.option(form.Value, "dest_addr", _("Destination Address"));
-        o.datatype = "host";
-        o.rmempty = true;
-
-        o = ss.option(form.Value, "dest_port", _("Destination Port"));
-        o.datatype = "port";
-        o.rmempty = true;
-
-        o = ss.option(form.ListValue, 'domain_strategy', _('Domain Strategy'));
-        o.value("UseIP");
-        o.value("UseIPv4");
-        o.value("UseIPv6");
-        o.default = "UseIP";
-        o.modalonly = true;
-
-        o = ss.option(form.DynamicList, "domain_names", _("Domain names to associate"));
-        o.rmempty = true;
-
-        o = ss.option(form.Flag, 'rebind_domain_ok', _('Exempt rebind protection'), _('Avoid dnsmasq filtering RFC1918 IP addresses (and some TESTNET addresses as well) from result.'));
-        o.modalonly = true;
-
-        o = ss.option(form.Flag, 'force_forward', _('Force Forward'), _('This destination must be forwarded through an outbound server.'));
-        o.modalonly = true;
-
-        o = ss.option(form.ListValue, 'force_forward_server_tcp', _('Force Forward server (TCP)'));
-        o.depends("force_forward", "1");
-        o.datatype = "uciname";
-        for (const v of uci.sections(config_data, "servers")) {
-            o.value(v[".name"], v.alias || v.server + ":" + v.server_port);
-        }
-        o.modalonly = true;
-
-        o = ss.option(form.ListValue, 'force_forward_server_udp', _('Force Forward server (UDP)'));
-        o.depends("force_forward", "1");
-        o.datatype = "uciname";
-        for (const v of uci.sections(config_data, "servers")) {
-            o.value(v[".name"], v.alias || v.server + ":" + v.server_port);
-        }
-        o.modalonly = true;
+        o = s.taboption('transparent_proxy_rules', form.Value, 'mark', _('Socket Mark Number'), _('Avoid proxy loopback problems with local (gateway) traffic'));
+        o.datatype = 'range(1, 255)';
+        o.default = 255;
 
         s.tab('xray_server', _('HTTPS Server'));
 
@@ -841,7 +800,7 @@ return view.extend({
 
         add_flow_and_stream_security_conf(s, "xray_server", "web_server_protocol", "trojan", false, false);
 
-        o = s.taboption('xray_server', form.Value, 'web_server_password', _('UserId / Password'), _('Fill user_id for vmess / VLESS, or password for shadowsocks / trojan (also supports <a href="https://github.com/XTLS/Xray-core/issues/158">Xray UUID Mapping</a>)'));
+        o = s.taboption('xray_server', form.DynamicList, 'web_server_password', _('UserId / Password'), _('Fill user_id for vmess / VLESS, or password for shadowsocks / trojan (also supports <a href="https://github.com/XTLS/Xray-core/issues/158">Xray UUID Mapping</a>)'));
         o.depends("web_server_enable", "1");
 
         o = s.taboption('xray_server', form.Value, 'web_server_address', _('Default Fallback HTTP Server'), _("Only HTTP/1.1 supported here. For HTTP/2 upstream, use Fallback Servers below"));

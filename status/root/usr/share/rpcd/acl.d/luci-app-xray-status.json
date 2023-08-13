@@ -1,0 +1,16 @@
+{
+    "luci-app-xray-status": {
+        "description": "Grant access to xray configurations",
+        "read": {
+            "uci": [
+                "xray_fw4"
+            ],
+            "ubus": {
+                "xray": [
+                    "debugvars",
+                    "statssys"
+                ]
+            }
+        }
+    }
+}

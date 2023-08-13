@@ -223,28 +223,28 @@ function balancers() {
             "tag": "tcp_outbound",
             "selector": balancer(proxy, "tcp_balancer", "tcp_balancer"),
             "strategy": {
-                "type": "random"
+                "type": "roundRobin"
             }
         },
         {
             "tag": "udp_outbound",
             "selector": balancer(proxy, "udp_balancer", "udp_balancer"),
             "strategy": {
-                "type": "random"
+                "type": "roundRobin"
             }
         },
         {
             "tag": "tcp_outbound_v6",
             "selector": balancer(proxy, "tcp_balancer_v6", "tcp_balancer_v6"),
             "strategy": {
-                "type": "random"
+                "type": "roundRobin"
             }
         },
         {
             "tag": "udp_outbound_v6",
             "selector": balancer(proxy, "udp_balancer_v6", "udp_balancer_v6"),
             "strategy": {
-                "type": "random"
+                "type": "roundRobin"
             }
         }
     ];
@@ -254,7 +254,7 @@ function balancers() {
                 "tag": `extra_inbound_outbound_${e[".name"]}`,
                 "selector": balancer(e, "destination", `extra_inbound_${e[".name"]}`),
                 "strategy": {
-                    "type": "random"
+                    "type": "roundRobin"
                 }
             });
         }
